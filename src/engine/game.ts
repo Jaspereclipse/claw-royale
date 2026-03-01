@@ -1,13 +1,11 @@
-import { Player, Enemy, Item } from './entity.js';
+import { Player, Enemy } from './entity.js';
 import { Level, generateLevel, LEVEL_WIDTH, LEVEL_HEIGHT } from './level.js';
 import {
+  CombatState,
   resolveCombat,
   resolveEnemyAttack,
   useAbility,
   useItem,
-  consumeEnemySkipTurn,
-  tickShield,
-  resetCombatState,
 } from './combat.js';
 
 export type Direction = 'up' | 'down' | 'left' | 'right';
@@ -34,15 +32,22 @@ export class Game {
   messages: string[];
   depth: number;
   combatTarget: Enemy | null;
+  readonly combatState: CombatState;
+  private nextEntityId = 0;
 
   constructor() {
+    this.combatState = new CombatState();
     this.depth = 1;
-    this.level = generateLevel(this.depth);
-    this.player = new Player(this.level.playerStart);
+    this.level = generateLevel(this.depth, () => this.allocId());
+    this.player = new Player(this.allocId(), this.level.playerStart);
     this.turnCount = 0;
     this.state = 'playing';
     this.messages = ['You descend to the ocean floor. The hunt begins.'];
     this.combatTarget = null;
+  }
+
+  private allocId(): number {
+    return this.nextEntityId++;
   }
 
   start(): void {
@@ -64,7 +69,7 @@ export class Game {
     this.messages = [];
     this.turnCount++;
     this.player.tickCooldowns();
-    tickShield();
+    this.combatState.tickShield();
 
     const { dx, dy } = DIRECTION_DELTA[direction];
     const newX = this.player.position.x + dx;
@@ -129,7 +134,7 @@ export class Game {
     this.messages = [];
     this.turnCount++;
     this.player.tickCooldowns();
-    tickShield();
+    this.combatState.tickShield();
 
     const enemy = this.combatTarget;
 
@@ -150,7 +155,7 @@ export class Game {
           this.messages.push('Specify an ability name.');
           return { messages: this.messages, state: this.state };
         }
-        const result = useAbility(this.player, enemy, param);
+        const result = useAbility(this.player, enemy, param, this.combatState);
         this.messages.push(result.message);
         if (!result.success) {
           return { messages: this.messages, state: this.state };
@@ -175,8 +180,8 @@ export class Game {
     }
 
     // Enemy counter-attack
-    if (enemy.isAlive && !consumeEnemySkipTurn()) {
-      const enemyResult = resolveEnemyAttack(enemy, this.player);
+    if (enemy.isAlive && !this.combatState.consumeEnemySkipTurn()) {
+      const enemyResult = resolveEnemyAttack(enemy, this.player, this.combatState);
       this.messages.push(enemyResult.message);
     }
 
@@ -188,8 +193,72 @@ export class Game {
     return { messages: this.messages, state: this.state };
   }
 
+  useExplorationAbility(abilityName: string): TurnResult {
+    this.messages = [];
+    const nearestEnemy = this.findNearestEnemy();
+    const result = useAbility(this.player, nearestEnemy ?? null, abilityName, this.combatState);
+    this.messages.push(result.message);
+
+    if (result.success) {
+      this.turnCount++;
+      this.player.tickCooldowns();
+      this.combatState.tickShield();
+
+      if (nearestEnemy && !nearestEnemy.isAlive) {
+        this.level.removeEnemy(nearestEnemy);
+      }
+
+      this.processEnemyTurns();
+
+      if (!this.player.isAlive) {
+        this.state = 'gameover';
+        this.messages.push(`Defeated at depth ${this.depth}. Final score: ${this.player.score}`);
+      }
+    }
+
+    return { messages: this.messages, state: this.state };
+  }
+
+  useInventoryItem(index: number): TurnResult {
+    this.messages = [];
+
+    const result = useItem(this.player, index);
+    this.messages.push(result.message);
+
+    if (result.success) {
+      this.turnCount++;
+      this.player.tickCooldowns();
+      this.combatState.tickShield();
+
+      this.processEnemyTurns();
+
+      if (!this.player.isAlive) {
+        this.state = 'gameover';
+        this.messages.push(`Defeated at depth ${this.depth}. Final score: ${this.player.score}`);
+      }
+    }
+
+    return { messages: this.messages, state: this.state };
+  }
+
+  private findNearestEnemy(): Enemy | undefined {
+    let nearest: Enemy | undefined;
+    let bestDist = Infinity;
+    const px = this.player.position.x;
+    const py = this.player.position.y;
+    for (const enemy of this.level.enemies) {
+      if (!enemy.isAlive) continue;
+      const dist = Math.abs(enemy.position.x - px) + Math.abs(enemy.position.y - py);
+      if (dist <= VISIBILITY_RADIUS && dist < bestDist) {
+        bestDist = dist;
+        nearest = enemy;
+      }
+    }
+    return nearest;
+  }
+
   private processEnemyTurns(): void {
-    if (consumeEnemySkipTurn()) {
+    if (this.combatState.consumeEnemySkipTurn()) {
       this.messages.push('Enemies are blinded by the ink cloud!');
       return;
     }
@@ -208,7 +277,7 @@ export class Game {
       switch (enemy.behavior) {
         case 'aggressive':
           if (dist <= 1) {
-            const result = resolveEnemyAttack(enemy, this.player);
+            const result = resolveEnemyAttack(enemy, this.player, this.combatState);
             this.messages.push(result.message);
             continue;
           }
@@ -224,7 +293,7 @@ export class Game {
           // Random movement
           if (dist <= 1) {
             // Attack only if adjacent
-            const result = resolveEnemyAttack(enemy, this.player);
+            const result = resolveEnemyAttack(enemy, this.player, this.combatState);
             this.messages.push(result.message);
             continue;
           }
@@ -246,7 +315,7 @@ export class Game {
               moveY = dy > 0 ? -1 : 1;
             }
           } else if (dist <= 1) {
-            const result = resolveEnemyAttack(enemy, this.player);
+            const result = resolveEnemyAttack(enemy, this.player, this.combatState);
             this.messages.push(result.message);
             continue;
           } else {
@@ -278,19 +347,12 @@ export class Game {
 
   private descendLevel(): void {
     this.depth++;
-    this.level = generateLevel(this.depth);
+    this.level = generateLevel(this.depth, () => this.allocId());
     this.player.position = { ...this.level.playerStart };
     this.player.level++;
-    resetCombatState();
+    this.combatState.reset();
     this.combatTarget = null;
     this.state = 'playing';
     this.messages.push(`Descended to depth ${this.depth}. The currents grow stronger...`);
-  }
-
-  useInventoryItem(index: number): TurnResult {
-    this.messages = [];
-    const result = useItem(this.player, index);
-    this.messages.push(result.message);
-    return { messages: this.messages, state: this.state };
   }
 }

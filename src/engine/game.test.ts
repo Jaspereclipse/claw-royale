@@ -1,13 +1,18 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Entity, Player, Enemy, Item } from './entity.js';
-import { calculateDamage, resolveCombat, useAbility, useItem, resetCombatState } from './combat.js';
+import { CombatState, calculateDamage, resolveCombat, useAbility, useItem } from './combat.js';
 import { generateLevel, LEVEL_WIDTH, LEVEL_HEIGHT } from './level.js';
 import { Game } from './game.js';
 
+let testId = 0;
+function nextId(): number {
+  return testId++;
+}
+
 describe('Entity', () => {
   it('should create an entity with correct properties', () => {
-    const entity = new Entity('Test', { x: 5, y: 10 }, 20, 8, 4, '@', '\x1b[31m');
+    const entity = new Entity(nextId(), 'Test', { x: 5, y: 10 }, 20, 8, 4, '@', '\x1b[31m');
     assert.equal(entity.name, 'Test');
     assert.equal(entity.position.x, 5);
     assert.equal(entity.position.y, 10);
@@ -20,7 +25,7 @@ describe('Entity', () => {
   });
 
   it('should take damage and track death', () => {
-    const entity = new Entity('Test', { x: 0, y: 0 }, 10, 5, 2, 'x', '');
+    const entity = new Entity(nextId(), 'Test', { x: 0, y: 0 }, 10, 5, 2, 'x', '');
     entity.takeDamage(7);
     assert.equal(entity.health, 3);
     assert.equal(entity.isAlive, true);
@@ -30,7 +35,7 @@ describe('Entity', () => {
   });
 
   it('should heal up to max health', () => {
-    const entity = new Entity('Test', { x: 0, y: 0 }, 20, 5, 2, 'x', '');
+    const entity = new Entity(nextId(), 'Test', { x: 0, y: 0 }, 20, 5, 2, 'x', '');
     entity.takeDamage(15);
     assert.equal(entity.health, 5);
     const healed = entity.heal(10);
@@ -44,7 +49,7 @@ describe('Entity', () => {
 
 describe('Player', () => {
   it('should create a player with abilities and inventory', () => {
-    const player = new Player({ x: 0, y: 0 });
+    const player = new Player(nextId(), { x: 0, y: 0 });
     assert.equal(player.name, 'Lobster');
     assert.equal(player.abilities.length, 4);
     assert.equal(player.inventory.length, 0);
@@ -53,7 +58,7 @@ describe('Player', () => {
   });
 
   it('should manage ability cooldowns', () => {
-    const player = new Player({ x: 0, y: 0 });
+    const player = new Player(nextId(), { x: 0, y: 0 });
     assert.equal(player.canUseAbility('ClawStrike'), true);
     player.useAbility('ClawStrike');
     assert.equal(player.canUseAbility('ClawStrike'), false);
@@ -67,11 +72,20 @@ describe('Player', () => {
     assert.equal(ability.currentCooldown, 0);
     assert.equal(player.canUseAbility('ClawStrike'), true);
   });
+
+  it('should accept custom abilities', () => {
+    const customAbilities = [
+      { name: 'TestAbility', description: 'A test', cooldown: 2, currentCooldown: 0 },
+    ];
+    const player = new Player(nextId(), { x: 0, y: 0 }, customAbilities);
+    assert.equal(player.abilities.length, 1);
+    assert.equal(player.abilities[0].name, 'TestAbility');
+  });
 });
 
 describe('Enemy', () => {
   it('should create an enemy with behavior and xpReward', () => {
-    const enemy = new Enemy('Crab', { x: 3, y: 4 }, 10, 5, 3, 'c', '\x1b[33m', 8, 'aggressive');
+    const enemy = new Enemy(nextId(), 'Crab', { x: 3, y: 4 }, 10, 5, 3, 'c', '\x1b[33m', 8, 'aggressive');
     assert.equal(enemy.name, 'Crab');
     assert.equal(enemy.xpReward, 8);
     assert.equal(enemy.behavior, 'aggressive');
@@ -84,6 +98,13 @@ describe('Item', () => {
     assert.equal(item.name, 'Seaweed');
     assert.equal(item.effect, 'heal');
     assert.equal(item.value, 5);
+    assert.equal(item.position, undefined);
+  });
+
+  it('should create an item with position', () => {
+    const item = new Item('Pearl', 'o', '\x1b[37m', 'score', 10, { x: 5, y: 3 });
+    assert.equal(item.position?.x, 5);
+    assert.equal(item.position?.y, 3);
   });
 });
 
@@ -96,9 +117,8 @@ describe('Combat', () => {
   });
 
   it('should resolve combat and kill enemy', () => {
-    resetCombatState();
-    const player = new Player({ x: 0, y: 0 });
-    const enemy = new Enemy('Crab', { x: 1, y: 0 }, 1, 3, 0, 'c', '', 5, 'passive');
+    const player = new Player(nextId(), { x: 0, y: 0 });
+    const enemy = new Enemy(nextId(), 'Crab', { x: 1, y: 0 }, 1, 3, 0, 'c', '', 5, 'passive');
     const result = resolveCombat(player, enemy);
     assert.equal(result.killed, true);
     assert.equal(result.xpGained, 5);
@@ -106,9 +126,8 @@ describe('Combat', () => {
   });
 
   it('should resolve combat without killing enemy', () => {
-    resetCombatState();
-    const player = new Player({ x: 0, y: 0 });
-    const enemy = new Enemy('Shark', { x: 1, y: 0 }, 100, 10, 5, 'S', '', 20, 'aggressive');
+    const player = new Player(nextId(), { x: 0, y: 0 });
+    const enemy = new Enemy(nextId(), 'Shark', { x: 1, y: 0 }, 100, 10, 5, 'S', '', 20, 'aggressive');
     const result = resolveCombat(player, enemy);
     assert.equal(result.killed, false);
     assert.equal(result.xpGained, 0);
@@ -116,44 +135,46 @@ describe('Combat', () => {
   });
 
   it('should use ClawStrike ability for double damage', () => {
-    resetCombatState();
-    const player = new Player({ x: 0, y: 0 });
-    const enemy = new Enemy('Crab', { x: 1, y: 0 }, 100, 3, 0, 'c', '', 5, 'passive');
-    const result = useAbility(player, enemy, 'ClawStrike');
+    const combatState = new CombatState();
+    const player = new Player(nextId(), { x: 0, y: 0 });
+    const enemy = new Enemy(nextId(), 'Crab', { x: 1, y: 0 }, 100, 3, 0, 'c', '', 5, 'passive');
+    const result = useAbility(player, enemy, 'ClawStrike', combatState);
     assert.equal(result.success, true);
     assert.ok(result.message.includes('Claw Strike'));
     assert.equal(player.canUseAbility('ClawStrike'), false);
   });
 
   it('should use ShellShield ability', () => {
-    resetCombatState();
-    const player = new Player({ x: 0, y: 0 });
-    const result = useAbility(player, null, 'ShellShield');
+    const combatState = new CombatState();
+    const player = new Player(nextId(), { x: 0, y: 0 });
+    const result = useAbility(player, null, 'ShellShield', combatState);
     assert.equal(result.success, true);
     assert.ok(result.message.includes('Shield'));
+    assert.equal(combatState.isShieldActive(), true);
   });
 
   it('should use InkCloud ability', () => {
-    resetCombatState();
-    const player = new Player({ x: 0, y: 0 });
-    const enemy = new Enemy('Eel', { x: 1, y: 0 }, 10, 5, 2, 'e', '', 8, 'aggressive');
-    const result = useAbility(player, enemy, 'InkCloud');
+    const combatState = new CombatState();
+    const player = new Player(nextId(), { x: 0, y: 0 });
+    const enemy = new Enemy(nextId(), 'Eel', { x: 1, y: 0 }, 10, 5, 2, 'e', '', 8, 'aggressive');
+    const result = useAbility(player, enemy, 'InkCloud', combatState);
     assert.equal(result.success, true);
     assert.ok(result.message.includes('Ink Cloud'));
+    assert.equal(combatState.consumeEnemySkipTurn(), true);
   });
 
   it('should refuse ability on cooldown', () => {
-    resetCombatState();
-    const player = new Player({ x: 0, y: 0 });
-    const enemy = new Enemy('Crab', { x: 1, y: 0 }, 50, 3, 0, 'c', '', 5, 'passive');
-    useAbility(player, enemy, 'ClawStrike');
-    const result = useAbility(player, enemy, 'ClawStrike');
+    const combatState = new CombatState();
+    const player = new Player(nextId(), { x: 0, y: 0 });
+    const enemy = new Enemy(nextId(), 'Crab', { x: 1, y: 0 }, 50, 3, 0, 'c', '', 5, 'passive');
+    useAbility(player, enemy, 'ClawStrike', combatState);
+    const result = useAbility(player, enemy, 'ClawStrike', combatState);
     assert.equal(result.success, false);
     assert.ok(result.message.includes('cooldown'));
   });
 
   it('should use items from inventory', () => {
-    const player = new Player({ x: 0, y: 0 });
+    const player = new Player(nextId(), { x: 0, y: 0 });
     player.takeDamage(10);
     player.inventory.push(new Item('Seaweed', '*', '', 'heal', 5));
     const result = useItem(player, 0);
@@ -165,43 +186,46 @@ describe('Combat', () => {
 
 describe('Level Generation', () => {
   it('should generate a level with correct dimensions', () => {
-    const level = generateLevel(1);
+    const level = generateLevel(1, nextId);
     assert.equal(level.grid.length, LEVEL_HEIGHT);
     assert.equal(level.grid[0].length, LEVEL_WIDTH);
   });
 
   it('should place player start on passable tile', () => {
-    const level = generateLevel(1);
+    const level = generateLevel(1, nextId);
     const tile = level.getTile(level.playerStart.x, level.playerStart.y);
     assert.ok(tile);
     assert.equal(tile.passable, true);
   });
 
   it('should place stairs', () => {
-    const level = generateLevel(1);
+    const level = generateLevel(1, nextId);
     const tile = level.getTile(level.stairsPosition.x, level.stairsPosition.y);
     assert.ok(tile);
     assert.equal(tile.type, 'stairs');
   });
 
   it('should place enemies', () => {
-    const level = generateLevel(1);
+    const level = generateLevel(1, nextId);
     assert.ok(level.enemies.length > 0, 'Should have at least one enemy');
   });
 
-  it('should place items', () => {
-    const level = generateLevel(1);
+  it('should place items with positions', () => {
+    const level = generateLevel(1, nextId);
     assert.ok(level.items.length > 0, 'Should have at least one item');
+    for (const item of level.items) {
+      assert.ok(item.position !== undefined, 'Placed items should have positions');
+    }
   });
 
   it('should increase enemies with difficulty', () => {
-    const easy = generateLevel(1);
-    const hard = generateLevel(5);
+    const easy = generateLevel(1, nextId);
+    const hard = generateLevel(5, nextId);
     assert.ok(hard.enemies.length >= easy.enemies.length, 'Higher difficulty should have more enemies');
   });
 
   it('should detect passability correctly', () => {
-    const level = generateLevel(1);
+    const level = generateLevel(1, nextId);
     // Player start should be passable
     assert.equal(level.isPassable(level.playerStart.x, level.playerStart.y), true);
     // Out of bounds should not be passable
@@ -273,5 +297,21 @@ describe('Game', () => {
     assert.equal(game.isVisible(px, py), true);
     assert.equal(game.isVisible(px + 4, py + 4), true); // distance 8
     assert.equal(game.isVisible(px + 5, py + 4), false); // distance 9
+  });
+
+  it('should advance turn when using inventory item', () => {
+    const game = new Game();
+    game.player.takeDamage(10);
+    game.player.inventory.push(new Item('Seaweed', '*', '', 'heal', 5));
+    const turnBefore = game.turnCount;
+    game.useInventoryItem(0);
+    assert.equal(game.turnCount, turnBefore + 1);
+  });
+
+  it('should use exploration ability via Game method', () => {
+    const game = new Game();
+    const result = game.useExplorationAbility('ShellShield');
+    assert.ok(result.messages.length > 0);
+    assert.ok(result.messages[0].includes('Shield'));
   });
 });

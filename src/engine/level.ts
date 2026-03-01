@@ -189,6 +189,92 @@ function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+/**
+ * Returns true every 3 depths (3, 6, 9, ...).
+ */
+export function isBossLevel(depth: number): boolean {
+  return depth > 0 && depth % 3 === 0;
+}
+
+/**
+ * Generate a large open boss room with the boss in center and few minions.
+ */
+export function generateBossRoom(difficulty: number, allocId: () => number): Level {
+  const level = new Level(difficulty);
+
+  // Carve one large open room (leaving 2-tile border of rock)
+  const roomX = 2;
+  const roomY = 2;
+  const roomW = LEVEL_WIDTH - 4;
+  const roomH = LEVEL_HEIGHT - 4;
+
+  for (let y = roomY; y < roomY + roomH; y++) {
+    for (let x = roomX; x < roomX + roomW; x++) {
+      level.setTile(x, y, 'water');
+    }
+  }
+
+  // Scatter some terrain variation (sand/kelp only, no coral blocking)
+  for (let y = roomY; y < roomY + roomH; y++) {
+    for (let x = roomX; x < roomX + roomW; x++) {
+      const roll = Math.random();
+      if (roll < 0.03) {
+        level.setTile(x, y, 'sand');
+      } else if (roll < 0.05) {
+        level.setTile(x, y, 'kelp');
+      }
+    }
+  }
+
+  // Player starts near the bottom-left
+  const playerX = roomX + 3;
+  const playerY = roomY + roomH - 3;
+  level.playerStart = { x: playerX, y: playerY };
+  level.setTile(playerX, playerY, 'water'); // ensure passable
+
+  // Stairs at bottom-right (only accessible after boss is defeated)
+  const stairsX = roomX + roomW - 3;
+  const stairsY = roomY + roomH - 3;
+  level.stairsPosition = { x: stairsX, y: stairsY };
+  level.setTile(stairsX, stairsY, 'stairs');
+
+  // Place a few minions (fewer than a normal level)
+  const waterTiles = getWaterTiles(level);
+  const usedPositions = new Set<string>();
+  usedPositions.add(`${playerX},${playerY}`);
+  usedPositions.add(`${stairsX},${stairsY}`);
+  // Reserve center for boss
+  const centerX = Math.floor(LEVEL_WIDTH / 2);
+  const centerY = Math.floor(LEVEL_HEIGHT / 2);
+  usedPositions.add(`${centerX},${centerY}`);
+
+  const minionCount = Math.min(3, Math.floor(difficulty * 0.5));
+  const availableEnemies = ENEMY_POOL.filter((_, idx) => idx <= Math.min(difficulty, ENEMY_POOL.length - 1));
+
+  for (let i = 0; i < minionCount && waterTiles.length > 0; i++) {
+    let pos: Position | null = null;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const candidate = pickRandom(waterTiles);
+      const key = `${candidate.x},${candidate.y}`;
+      if (!usedPositions.has(key)) {
+        pos = candidate;
+        usedPositions.add(key);
+        break;
+      }
+    }
+    if (!pos) continue;
+
+    const template = pickRandom(availableEnemies);
+    const scaledHealth = template.health + Math.floor(difficulty * 2);
+    const scaledAttack = template.attack + Math.floor(difficulty * 0.5);
+    level.enemies.push(
+      new Enemy(allocId(), template.name, pos, scaledHealth, scaledAttack, template.defense, template.symbol, template.color, template.xpReward, template.behavior),
+    );
+  }
+
+  return level;
+}
+
 export function generateLevel(difficulty: number, allocId: () => number): Level {
   const level = new Level(difficulty);
 

@@ -1,0 +1,48 @@
+import type { HazardDefinition, HazardType } from '../engine/types.js';
+
+export const HAZARD_DEFINITIONS: Record<HazardType, HazardDefinition> = {
+  vent: {
+    type: 'vent',
+    name: 'Underwater Vent',
+    symbol: '▲',
+    color: '\u001b[31m',
+    description: 'Scalding vent that burns anything standing on it.',
+    damagePerTurn: 8,
+    movesPlayer: false,
+    blocksMovement: false,
+    duration: null,
+  },
+  whirlpool: {
+    type: 'whirlpool',
+    name: 'Whirlpool',
+    symbol: '@',
+    color: '\u001b[36m',
+    description: 'Spinning current that drags targets to a random adjacent tile.',
+    damagePerTurn: 0,
+    movesPlayer: true,
+    blocksMovement: false,
+    duration: null,
+  },
+  current: {
+    type: 'current',
+    name: 'Current',
+    symbol: '→',
+    color: '\u001b[34m',
+    description: 'Powerful flow that pushes targets two tiles along its direction.',
+    damagePerTurn: 0,
+    movesPlayer: true,
+    blocksMovement: false,
+    duration: null,
+  },
+  'toxic-cloud': {
+    type: 'toxic-cloud',
+    name: 'Toxic Cloud',
+    symbol: '☁',
+    color: '\u001b[32m',
+    description: 'A drifting toxic plume that deals damage over time.',
+    damagePerTurn: 5,
+    movesPlayer: false,
+    blocksMovement: false,
+    duration: 10,
+  },
+};

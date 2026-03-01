@@ -55,12 +55,29 @@ function drawFrame(width: number, height: number): void {
 export async function showTitleScreen(): Promise<void> {
   clearScreen();
   const width = Math.max(...TITLE_ART.map((line) => line.length), 80) + 8;
-  const height = TITLE_ART.length + 10;
+  const height = TITLE_ART.length + 18;
   drawFrame(width, height);
 
   setColor('cyan');
   TITLE_ART.forEach((line, index) => {
     moveCursor(3 + index, 5);
+    process.stdout.write(line);
+  });
+
+  const helpStart = 3 + TITLE_ART.length + 2;
+  setColor('white');
+  moveCursor(helpStart, 5);
+  process.stdout.write('HOW TO PLAY');
+  const help = [
+    'WASD / Arrows  Move & attack enemies',
+    '1-4            Use abilities (Claw Strike, Shield, Ink Cloud, Pincer Grab)',
+    'i              View inventory',
+    '>              Walk onto stairs to descend deeper',
+    'q              Quit',
+  ];
+  setColor('reset');
+  help.forEach((line, i) => {
+    moveCursor(helpStart + 1 + i, 7);
     process.stdout.write(line);
   });
 

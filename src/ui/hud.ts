@@ -10,6 +10,12 @@ export interface HudStats {
 
 export type AbilityCooldowns = Readonly<Record<1 | 2 | 3 | 4, number>>;
 
+export interface AbilityDisplay {
+  readonly slot: number;
+  readonly name: string;
+  readonly cooldown: number;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -33,10 +39,22 @@ export function renderHud(
   messages: readonly string[],
   originRow: number,
   originCol = 1,
+  abilities?: readonly AbilityDisplay[],
 ): void {
   const hpText = `HP ${stats.hp}/${stats.maxHp} ${hpBar(stats.hp, stats.maxHp)}`;
   const infoText = `Score ${stats.score} | Depth ${stats.depth} | Turn ${stats.turn}`;
-  const cooldownText = `Abilities: 1[${cooldowns[1]}] 2[${cooldowns[2]}] 3[${cooldowns[3]}] 4[${cooldowns[4]}]`;
+
+  let cooldownText: string;
+  if (abilities && abilities.length > 0) {
+    cooldownText = abilities
+      .map((a) => {
+        const ready = a.cooldown === 0 ? 'RDY' : String(a.cooldown);
+        return `${a.slot}:${a.name}[${ready}]`;
+      })
+      .join(' ');
+  } else {
+    cooldownText = `Abilities: 1[${cooldowns[1]}] 2[${cooldowns[2]}] 3[${cooldowns[3]}] 4[${cooldowns[4]}]`;
+  }
 
   printLine(originRow, originCol, hpText.padEnd(80, ' '));
   printLine(originRow + 1, originCol, infoText.padEnd(80, ' '));

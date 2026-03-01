@@ -21,7 +21,7 @@ const ANSI: Readonly<Record<AnsiColor, string>> = {
   white: '\u001b[37m',
 };
 
-export type TileType = 'water' | 'rock' | 'sand' | 'coral' | 'kelp';
+export type TileType = 'water' | 'rock' | 'sand' | 'coral' | 'kelp' | 'stairs';
 
 export interface RenderTile {
   readonly type: TileType;
@@ -74,7 +74,26 @@ function tileColor(type: TileType): AnsiColor {
   if (type === 'rock') return 'gray';
   if (type === 'sand') return 'yellow';
   if (type === 'coral') return 'red';
+  if (type === 'stairs') return 'white';
   return 'green';
+}
+
+const ANSI_TO_COLOR: Record<string, AnsiColor> = {
+  '\x1b[34m': 'blue',
+  '\x1b[90m': 'gray',
+  '\x1b[33m': 'yellow',
+  '\x1b[31m': 'red',
+  '\x1b[32m': 'green',
+  '\x1b[35m': 'magenta',
+  '\x1b[36m': 'cyan',
+  '\x1b[37m': 'white',
+  '\x1b[37;1m': 'white',
+  '\x1b[33;1m': 'yellow',
+  '\x1b[36;1m': 'cyan',
+};
+
+export function ansiToColor(ansi: string): AnsiColor {
+  return ANSI_TO_COLOR[ansi] ?? 'white';
 }
 
 function coordKey(x: number, y: number): string {

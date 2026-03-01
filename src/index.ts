@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 import { Game, VISIBILITY_RADIUS } from './engine/game.js';
 import type { Direction } from './engine/game.js';
-import type { Enemy } from './engine/entity.js';
 import { LEVEL_WIDTH, LEVEL_HEIGHT } from './engine/level.js';
-import { useAbility } from './engine/combat.js';
 import { renderHud, type AbilityDisplay, type AbilityCooldowns, type HudStats } from './ui/hud.js';
 import { getInput } from './ui/input.js';
 import {
@@ -76,15 +74,12 @@ function buildRenderLevel(game: Game): RenderLevel {
       color: ansiToColor(e.color),
     }));
 
-  const items: RenderEntity[] = game.level.items.map((item) => {
-    const placed = item as { _position?: { x: number; y: number } };
-    return {
-      x: placed._position?.x ?? 0,
-      y: placed._position?.y ?? 0,
-      symbol: item.symbol,
-      color: ansiToColor(item.color),
-    };
-  });
+  const items: RenderEntity[] = game.level.items.map((item) => ({
+    x: item.position?.x ?? 0,
+    y: item.position?.y ?? 0,
+    symbol: item.symbol,
+    color: ansiToColor(item.color),
+  }));
 
   return {
     width: LEVEL_WIDTH,
@@ -172,15 +167,8 @@ async function runSession(): Promise<SessionResult> {
           const result = game.processCombatTurn('ability', abilityName);
           messages.push(...result.messages);
         } else {
-          // Use ability from exploration (target nearest visible enemy or null)
-          const nearestEnemy = findNearestEnemy(game);
-          const result = useAbility(game.player, nearestEnemy ?? null, abilityName);
-          messages.push(result.message);
-          if (result.success) {
-            if (nearestEnemy && !nearestEnemy.isAlive) {
-              game.level.removeEnemy(nearestEnemy);
-            }
-          }
+          const result = game.useExplorationAbility(abilityName);
+          messages.push(...result.messages);
         }
         if (messages.length > 12) messages.splice(0, messages.length - 12);
         continue;
@@ -216,22 +204,6 @@ async function runSession(): Promise<SessionResult> {
   }
 
   return { score: game.player.score, depth: game.depth };
-}
-
-function findNearestEnemy(game: Game): Enemy | undefined {
-  let nearest: Enemy | undefined;
-  let bestDist = Infinity;
-  const px = game.player.position.x;
-  const py = game.player.position.y;
-  for (const enemy of game.level.enemies) {
-    if (!enemy.isAlive) continue;
-    const dist = Math.abs(enemy.position.x - px) + Math.abs(enemy.position.y - py);
-    if (dist <= VISIBILITY_RADIUS && dist < bestDist) {
-      bestDist = dist;
-      nearest = enemy;
-    }
-  }
-  return nearest;
 }
 
 function deltaToDirection(dx: number, dy: number): Direction | null {

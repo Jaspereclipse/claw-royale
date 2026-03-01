@@ -78,7 +78,7 @@ export class Level {
   }
 
   getItemAt(x: number, y: number): Item | undefined {
-    return this.items.find(i => i.symbol !== '' && isAtPosition(i, x, y));
+    return this.items.find(i => i.position !== undefined && i.position.x === x && i.position.y === y);
   }
 
   removeItem(item: Item): void {
@@ -90,15 +90,6 @@ export class Level {
     const idx = this.enemies.indexOf(enemy);
     if (idx !== -1) this.enemies.splice(idx, 1);
   }
-}
-
-interface PlacedItem extends Item {
-  _position?: Position;
-}
-
-function isAtPosition(item: Item, x: number, y: number): boolean {
-  const placed = item as PlacedItem;
-  return placed._position !== undefined && placed._position.x === x && placed._position.y === y;
 }
 
 function roomsOverlap(a: Room, b: Room): boolean {
@@ -198,7 +189,7 @@ function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-export function generateLevel(difficulty: number): Level {
+export function generateLevel(difficulty: number, allocId: () => number): Level {
   const level = new Level(difficulty);
 
   // Generate rooms
@@ -264,7 +255,7 @@ export function generateLevel(difficulty: number): Level {
     const scaledHealth = template.health + Math.floor(difficulty * 2);
     const scaledAttack = template.attack + Math.floor(difficulty * 0.5);
     level.enemies.push(
-      new Enemy(template.name, pos, scaledHealth, scaledAttack, template.defense, template.symbol, template.color, template.xpReward, template.behavior),
+      new Enemy(allocId(), template.name, pos, scaledHealth, scaledAttack, template.defense, template.symbol, template.color, template.xpReward, template.behavior),
     );
   }
 
@@ -284,8 +275,7 @@ export function generateLevel(difficulty: number): Level {
     if (!pos) continue;
 
     const template = pickRandom(ITEM_POOL);
-    const item = new Item(template.name, template.symbol, template.color, template.effect, template.value) as PlacedItem;
-    item._position = { ...pos };
+    const item = new Item(template.name, template.symbol, template.color, template.effect, template.value, { ...pos });
     level.items.push(item);
   }
 

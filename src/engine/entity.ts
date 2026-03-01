@@ -6,8 +6,6 @@ export interface Position {
 export type ItemEffect = 'heal' | 'armor' | 'weapon' | 'score';
 export type EnemyBehavior = 'aggressive' | 'passive' | 'fleeing';
 
-let nextEntityId = 0;
-
 export class Entity {
   readonly id: number;
   name: string;
@@ -20,6 +18,7 @@ export class Entity {
   color: string;
 
   constructor(
+    id: number,
     name: string,
     position: Position,
     health: number,
@@ -28,7 +27,7 @@ export class Entity {
     symbol: string,
     color: string,
   ) {
-    this.id = nextEntityId++;
+    this.id = id;
     this.name = name;
     this.position = { ...position };
     this.health = health;
@@ -63,20 +62,22 @@ export interface Ability {
   currentCooldown: number;
 }
 
+export const DEFAULT_ABILITIES: Ability[] = [
+  { name: 'ClawStrike', description: '2x damage attack', cooldown: 3, currentCooldown: 0 },
+  { name: 'ShellShield', description: 'Halve incoming damage for 3 turns', cooldown: 5, currentCooldown: 0 },
+  { name: 'InkCloud', description: 'Skip enemy turn', cooldown: 4, currentCooldown: 0 },
+  { name: 'PincerGrab', description: 'Steal item from enemy', cooldown: 6, currentCooldown: 0 },
+];
+
 export class Player extends Entity {
   abilities: Ability[];
   inventory: Item[];
   score: number;
   level: number;
 
-  constructor(position: Position) {
-    super('Lobster', position, 30, 8, 4, '@', '\x1b[31m');
-    this.abilities = [
-      { name: 'ClawStrike', description: '2x damage attack', cooldown: 3, currentCooldown: 0 },
-      { name: 'ShellShield', description: 'Halve incoming damage for 3 turns', cooldown: 5, currentCooldown: 0 },
-      { name: 'InkCloud', description: 'Skip enemy turn', cooldown: 4, currentCooldown: 0 },
-      { name: 'PincerGrab', description: 'Steal item from enemy', cooldown: 6, currentCooldown: 0 },
-    ];
+  constructor(id: number, position: Position, abilities?: Ability[]) {
+    super(id, 'Lobster', position, 30, 8, 4, '@', '\x1b[31m');
+    this.abilities = (abilities ?? DEFAULT_ABILITIES).map(a => ({ ...a }));
     this.inventory = [];
     this.score = 0;
     this.level = 1;
@@ -112,6 +113,7 @@ export class Enemy extends Entity {
   behavior: EnemyBehavior;
 
   constructor(
+    id: number,
     name: string,
     position: Position,
     health: number,
@@ -122,7 +124,7 @@ export class Enemy extends Entity {
     xpReward: number,
     behavior: EnemyBehavior,
   ) {
-    super(name, position, health, attack, defense, symbol, color);
+    super(id, name, position, health, attack, defense, symbol, color);
     this.xpReward = xpReward;
     this.behavior = behavior;
   }
@@ -134,12 +136,14 @@ export class Item {
   color: string;
   effect: ItemEffect;
   value: number;
+  position?: Position;
 
-  constructor(name: string, symbol: string, color: string, effect: ItemEffect, value: number) {
+  constructor(name: string, symbol: string, color: string, effect: ItemEffect, value: number, position?: Position) {
     this.name = name;
     this.symbol = symbol;
     this.color = color;
     this.effect = effect;
     this.value = value;
+    this.position = position ? { ...position } : undefined;
   }
 }

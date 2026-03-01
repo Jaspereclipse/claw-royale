@@ -1,17 +1,19 @@
 #!/usr/bin/env node
-import { CREATURES } from './data/creatures.js';
-import { ITEMS } from './data/items.js';
-import { Game } from './engine/game.js';
-import { renderHud, type AbilityCooldowns, type HudStats } from './ui/hud.js';
+import { Game, VISIBILITY_RADIUS } from './engine/game.js';
+import type { Direction } from './engine/game.js';
+import type { Enemy } from './engine/entity.js';
+import { LEVEL_WIDTH, LEVEL_HEIGHT } from './engine/level.js';
+import { useAbility } from './engine/combat.js';
+import { renderHud, type AbilityDisplay, type AbilityCooldowns, type HudStats } from './ui/hud.js';
 import { getInput } from './ui/input.js';
 import {
+  ansiToColor,
   clearScreen,
   hideCursor,
   renderMap,
   showCursor,
   type RenderEntity,
   type RenderLevel,
-  type RenderPlayer,
   type RenderTile,
   type TileType,
 } from './ui/renderer.js';
@@ -25,287 +27,219 @@ import {
 
 interface SessionResult {
   readonly score: number;
-  readonly survivedTurns: number;
+  readonly depth: number;
 }
 
-interface RuntimeEnemy extends RenderEntity {
-  hp: number;
-  attack: number;
-  defense: number;
-  xpReward: number;
-  name: string;
+const ABILITY_SLOTS: Record<1 | 2 | 3 | 4, string> = {
+  1: 'ClawStrike',
+  2: 'ShellShield',
+  3: 'InkCloud',
+  4: 'PincerGrab',
+};
+
+function buildVisibleSet(game: Game): Set<string> {
+  const visible = new Set<string>();
+  const px = game.player.position.x;
+  const py = game.player.position.y;
+  for (let y = 0; y < LEVEL_HEIGHT; y++) {
+    for (let x = 0; x < LEVEL_WIDTH; x++) {
+      const dist = Math.abs(px - x) + Math.abs(py - y);
+      if (dist <= VISIBILITY_RADIUS) {
+        visible.add(`${x},${y}`);
+      }
+    }
+  }
+  return visible;
 }
 
-interface RuntimeItem extends RenderEntity {
-  id: string;
-  name: string;
-  hp?: number;
-  attack?: number;
-  defense?: number;
-  score?: number;
-}
-
-const MAP_WIDTH = 50;
-const MAP_HEIGHT = 18;
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function randomInt(maxExclusive: number): number {
-  return Math.floor(Math.random() * maxExclusive);
-}
-
-function tileTemplate(type: TileType): RenderTile {
-  if (type === 'water') return { type, symbol: '.' };
-  if (type === 'sand') return { type, symbol: ':' };
-  if (type === 'rock') return { type, symbol: '#' };
-  if (type === 'coral') return { type, symbol: '%' };
-  return { type, symbol: '"' };
-}
-
-function generateTiles(): RenderTile[][] {
+function buildRenderLevel(game: Game): RenderLevel {
   const tiles: RenderTile[][] = [];
-  for (let y = 0; y < MAP_HEIGHT; y += 1) {
+  for (let y = 0; y < LEVEL_HEIGHT; y++) {
     const row: RenderTile[] = [];
-    for (let x = 0; x < MAP_WIDTH; x += 1) {
-      const roll = Math.random();
-      const type: TileType = roll < 0.55 ? 'water' : roll < 0.7 ? 'sand' : roll < 0.82 ? 'kelp' : roll < 0.92 ? 'coral' : 'rock';
-      row.push(tileTemplate(type));
+    for (let x = 0; x < LEVEL_WIDTH; x++) {
+      const tile = game.level.getTile(x, y);
+      if (tile) {
+        row.push({ type: tile.type as TileType, symbol: tile.symbol });
+      } else {
+        row.push({ type: 'rock', symbol: '#' });
+      }
     }
     tiles.push(row);
   }
-  return tiles;
-}
 
-function isWalkable(tile: RenderTile | undefined): boolean {
-  if (!tile) return false;
-  return tile.type !== 'rock';
-}
+  const enemies: RenderEntity[] = game.level.enemies
+    .filter((e) => e.isAlive)
+    .map((e) => ({
+      x: e.position.x,
+      y: e.position.y,
+      symbol: e.symbol,
+      color: ansiToColor(e.color),
+    }));
 
-function randomOpenPosition(tiles: readonly (readonly RenderTile[])[]): { x: number; y: number } {
-  while (true) {
-    const x = randomInt(MAP_WIDTH);
-    const y = randomInt(MAP_HEIGHT);
-    if (isWalkable(tiles[y]?.[x])) return { x, y };
-  }
-}
+  const items: RenderEntity[] = game.level.items.map((item) => {
+    const placed = item as { _position?: { x: number; y: number } };
+    return {
+      x: placed._position?.x ?? 0,
+      y: placed._position?.y ?? 0,
+      symbol: item.symbol,
+      color: ansiToColor(item.color),
+    };
+  });
 
-function computeDamage(attack: number, defense: number): number {
-  return Math.max(1, attack - Math.floor(defense / 2) + randomInt(4));
-}
-
-function decrementCooldowns(cooldowns: AbilityCooldowns): AbilityCooldowns {
   return {
-    1: Math.max(0, cooldowns[1] - 1),
-    2: Math.max(0, cooldowns[2] - 1),
-    3: Math.max(0, cooldowns[3] - 1),
-    4: Math.max(0, cooldowns[4] - 1),
+    width: LEVEL_WIDTH,
+    height: LEVEL_HEIGHT,
+    tiles,
+    enemies,
+    items,
   };
+}
+
+function getAbilityDisplays(game: Game): AbilityDisplay[] {
+  return game.player.abilities.map((a, i) => ({
+    slot: i + 1,
+    name: a.name,
+    cooldown: a.currentCooldown,
+  }));
+}
+
+function getAbilityCooldowns(game: Game): AbilityCooldowns {
+  const abilities = game.player.abilities;
+  return {
+    1: abilities[0]?.currentCooldown ?? 0,
+    2: abilities[1]?.currentCooldown ?? 0,
+    3: abilities[2]?.currentCooldown ?? 0,
+    4: abilities[3]?.currentCooldown ?? 0,
+  };
+}
+
+function showInventory(game: Game): string[] {
+  const msgs: string[] = [];
+  const inv = game.player.inventory;
+  if (inv.length === 0) {
+    msgs.push('Inventory is empty.');
+  } else {
+    msgs.push(`Inventory (${inv.length} items):`);
+    inv.forEach((item, i) => {
+      msgs.push(`  ${i + 1}. ${item.name} (${item.effect}: ${item.value})`);
+    });
+  }
+  msgs.push(`ATK ${game.player.attack} | DEF ${game.player.defense}`);
+  return msgs;
 }
 
 async function runSession(): Promise<SessionResult> {
-  const engine = new Game();
-  void engine;
-
-  const tiles = generateTiles();
-  const visible = new Set<string>();
-  for (let y = 0; y < MAP_HEIGHT; y += 1) {
-    for (let x = 0; x < MAP_WIDTH; x += 1) {
-      visible.add(`${x},${y}`);
-    }
-  }
-
-  const player: RenderPlayer = {
-    ...randomOpenPosition(tiles),
-    symbol: '@',
-  };
-
-  const enemies: RuntimeEnemy[] = CREATURES.map((creature) => {
-    const pos = randomOpenPosition(tiles);
-    return {
-      x: pos.x,
-      y: pos.y,
-      symbol: creature.symbol,
-      color: creature.color === 'magenta' ? 'magenta' : 'red',
-      hp: creature.baseHealth,
-      attack: creature.baseAttack,
-      defense: creature.baseDefense,
-      xpReward: creature.xpReward,
-      name: creature.name,
-    };
-  });
-
-  const items: RuntimeItem[] = ITEMS.slice(0, 8).map((item) => {
-    const pos = randomOpenPosition(tiles);
-    return {
-      x: pos.x,
-      y: pos.y,
-      symbol: item.symbol,
-      color: item.color === 'gray' ? 'gray' : item.color === 'green' ? 'green' : 'yellow',
-      id: item.id,
-      name: item.name,
-      hp: item.hp,
-      attack: item.attack,
-      defense: item.defense,
-      score: item.score,
-    };
-  });
-
-  let hp = 100;
-  const maxHp = 100;
-  let score = 0;
-  let attack = 10;
-  let defense = 3;
-  let turn = 0;
-  let depth = 1;
-  let cooldowns: AbilityCooldowns = { 1: 0, 2: 0, 3: 0, 4: 0 };
-  const messages: string[] = ['Dive started. Use arrows/WASD to move.'];
+  const game = new Game();
+  const messages: string[] = [...game.messages];
 
   hideCursor();
   try {
-    while (hp > 0) {
+    while (game.state !== 'gameover') {
       clearScreen();
 
-      const level: RenderLevel = {
-        width: MAP_WIDTH,
-        height: MAP_HEIGHT,
-        tiles,
-        enemies,
-        items,
-      };
-      renderMap(level, player, visible, 1, 1);
+      const visible = buildVisibleSet(game);
+      const level = buildRenderLevel(game);
+      renderMap(level, { x: game.player.position.x, y: game.player.position.y, symbol: '@' }, visible, 1, 1);
 
-      const stats: HudStats = { hp, maxHp, score, depth, turn };
-      renderHud(stats, cooldowns, messages, MAP_HEIGHT + 2, 1);
+      const stats: HudStats = {
+        hp: game.player.health,
+        maxHp: game.player.maxHealth,
+        score: game.player.score,
+        depth: game.depth,
+        turn: game.turnCount,
+      };
+      const cooldowns = getAbilityCooldowns(game);
+      const abilityDisplays = getAbilityDisplays(game);
+      renderHud(stats, cooldowns, messages, LEVEL_HEIGHT + 2, 1, abilityDisplays);
 
       const action = await getInput();
+
       if (action.type === 'quit') {
         messages.push('You retreat to the surface.');
         break;
       }
 
       if (action.type === 'inventory') {
-        messages.push(`Loadout ATK ${attack}, DEF ${defense}`);
+        const invMessages = showInventory(game);
+        messages.push(...invMessages);
+        if (messages.length > 12) messages.splice(0, messages.length - 12);
+        continue;
       }
 
       if (action.type === 'ability') {
-        if (cooldowns[action.slot] > 0) {
-          messages.push(`Ability ${action.slot} cooling down (${cooldowns[action.slot]}).`);
+        const abilityName = ABILITY_SLOTS[action.slot];
+        if (game.state === 'combat' && game.combatTarget) {
+          const result = game.processCombatTurn('ability', abilityName);
+          messages.push(...result.messages);
         } else {
-          if (action.slot === 1) {
-            const heal = 12;
-            hp = clamp(hp + heal, 0, maxHp);
-            messages.push(`Ability 1: Mend shell (+${heal} HP).`);
-          } else if (action.slot === 2) {
-            attack += 2;
-            messages.push('Ability 2: Rending claw (+2 ATK this run).');
-          } else if (action.slot === 3) {
-            defense += 2;
-            messages.push('Ability 3: Harden carapace (+2 DEF this run).');
-          } else {
-            const stunDamage = 10;
-            const target = enemies[0];
-            if (target) {
-              target.hp -= stunDamage;
-              messages.push(`Ability 4: Shock pulse hits ${target.name} for ${stunDamage}.`);
-              if (target.hp <= 0) {
-                const idx = enemies.indexOf(target);
-                if (idx >= 0) {
-                  enemies.splice(idx, 1);
-                }
-                score += target.xpReward;
-                messages.push(`${target.name} is defeated.`);
-              }
-            } else {
-              messages.push('Ability 4 fizzles. No target in range.');
+          // Use ability from exploration (target nearest visible enemy or null)
+          const nearestEnemy = findNearestEnemy(game);
+          const result = useAbility(game.player, nearestEnemy ?? null, abilityName);
+          messages.push(result.message);
+          if (result.success) {
+            if (nearestEnemy && !nearestEnemy.isAlive) {
+              game.level.removeEnemy(nearestEnemy);
             }
           }
-          cooldowns = {
-            ...cooldowns,
-            [action.slot]: action.slot === 4 ? 6 : 4,
-          };
         }
+        if (messages.length > 12) messages.splice(0, messages.length - 12);
+        continue;
       }
 
       if (action.type === 'move') {
-        const nextX = clamp(player.x + action.dx, 0, MAP_WIDTH - 1);
-        const nextY = clamp(player.y + action.dy, 0, MAP_HEIGHT - 1);
+        const direction = deltaToDirection(action.dx, action.dy);
+        if (!direction) continue;
 
-        if (!isWalkable(tiles[nextY]?.[nextX])) {
-          messages.push('Rock wall blocks your path.');
+        if (game.state === 'combat') {
+          // In combat, movement means attack
+          const result = game.processCombatTurn('attack');
+          messages.push(...result.messages);
         } else {
-          player.x = nextX;
-          player.y = nextY;
+          const result = game.processTurn(direction);
+          messages.push(...result.messages);
+        }
+      }
 
-          const enemy = enemies.find((e) => e.x === player.x && e.y === player.y);
-          if (enemy) {
-            const outgoing = computeDamage(attack, enemy.defense);
-            enemy.hp -= outgoing;
-            messages.push(`You hit ${enemy.name} for ${outgoing}.`);
-
-            if (enemy.hp <= 0) {
-              const idx = enemies.indexOf(enemy);
-              if (idx >= 0) {
-                enemies.splice(idx, 1);
-              }
-              score += enemy.xpReward;
-              messages.push(`${enemy.name} falls. +${enemy.xpReward} score.`);
-            } else {
-              const incoming = computeDamage(enemy.attack, defense);
-              hp -= incoming;
-              messages.push(`${enemy.name} hits back for ${incoming}.`);
-            }
-          }
-
-          const item = items.find((it) => it.x === player.x && it.y === player.y);
-          if (item) {
-            const idx = items.indexOf(item);
-            if (idx >= 0) {
-              items.splice(idx, 1);
-            }
-
-            if (item.hp) {
-              hp = clamp(hp + item.hp, 0, maxHp);
-              messages.push(`You use ${item.name} (+${item.hp} HP).`);
-            }
-            if (item.attack) {
-              attack += item.attack;
-              messages.push(`${item.name} equipped (+${item.attack} ATK).`);
-            }
-            if (item.defense) {
-              defense += item.defense;
-              messages.push(`${item.name} equipped (+${item.defense} DEF).`);
-            }
-            if (item.score) {
-              score += item.score;
-              messages.push(`Collected ${item.name} (+${item.score} score).`);
-            }
-          }
+      if (action.type === 'confirm') {
+        if (game.state === 'combat' && game.combatTarget) {
+          const result = game.processCombatTurn('attack');
+          messages.push(...result.messages);
         }
       }
 
       if (messages.length > 12) {
         messages.splice(0, messages.length - 12);
       }
-
-      turn += 1;
-      if (turn % 30 === 0) {
-        depth += 1;
-      }
-      cooldowns = decrementCooldowns(cooldowns);
-
-      if (enemies.length === 0) {
-        messages.push('Floor cleared. You descend deeper.');
-        score += 250;
-        break;
-      }
     }
   } finally {
     showCursor();
   }
 
-  return { score, survivedTurns: turn };
+  return { score: game.player.score, depth: game.depth };
+}
+
+function findNearestEnemy(game: Game): Enemy | undefined {
+  let nearest: Enemy | undefined;
+  let bestDist = Infinity;
+  const px = game.player.position.x;
+  const py = game.player.position.y;
+  for (const enemy of game.level.enemies) {
+    if (!enemy.isAlive) continue;
+    const dist = Math.abs(enemy.position.x - px) + Math.abs(enemy.position.y - py);
+    if (dist <= VISIBILITY_RADIUS && dist < bestDist) {
+      bestDist = dist;
+      nearest = enemy;
+    }
+  }
+  return nearest;
+}
+
+function deltaToDirection(dx: number, dy: number): Direction | null {
+  if (dx === 1 && dy === 0) return 'right';
+  if (dx === -1 && dy === 0) return 'left';
+  if (dx === 0 && dy === -1) return 'up';
+  if (dx === 0 && dy === 1) return 'down';
+  return null;
 }
 
 async function main(): Promise<void> {

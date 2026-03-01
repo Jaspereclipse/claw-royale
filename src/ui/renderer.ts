@@ -9,6 +9,8 @@ export type AnsiColor =
   | 'cyan'
   | 'white';
 
+import type { ExtendedTileType } from '../engine/types.js';
+
 const ANSI: Readonly<Record<AnsiColor, string>> = {
   reset: '\u001b[0m',
   blue: '\u001b[34m',
@@ -21,7 +23,7 @@ const ANSI: Readonly<Record<AnsiColor, string>> = {
   white: '\u001b[37m',
 };
 
-export type TileType = 'water' | 'rock' | 'sand' | 'coral' | 'kelp' | 'stairs';
+export type TileType = ExtendedTileType;
 
 export interface RenderTile {
   readonly type: TileType;
@@ -69,12 +71,16 @@ export function showCursor(): void {
   process.stdout.write('\u001b[?25h');
 }
 
-function tileColor(type: TileType): AnsiColor {
+function tileColor(type: ExtendedTileType): AnsiColor {
   if (type === 'water') return 'blue';
   if (type === 'rock') return 'gray';
   if (type === 'sand') return 'yellow';
   if (type === 'coral') return 'red';
   if (type === 'stairs') return 'white';
+  if (type === 'vent') return 'red';
+  if (type === 'whirlpool') return 'cyan';
+  if (type === 'current') return 'blue';
+  if (type === 'toxic-cloud') return 'green';
   return 'green';
 }
 

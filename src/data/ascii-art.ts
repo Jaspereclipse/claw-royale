@@ -1,3 +1,5 @@
+import type { HazardType } from '../engine/types.js';
+
 export const TITLE_ART = [
   '   ________    ___ _       __   ____  ____  __  ________    __    ______',
   '  / ____/ /   /   | |     / /  / __ \\/ __ \\/ / / / __/ /   / /   / ____/',
@@ -15,6 +17,30 @@ export const LOBSTER_ART = [
   '    ^ \\   /___\\  /\\ |',
   '       |__|   |__|-" "',
 ] as const;
+
+export const BOSS_ENCOUNTER_ART = [
+  '                           .-"""-.',
+  '                         _/  .-.  \\_',
+  '               _.---._  (  (o o)  )  _.---._',
+  '            .-"  .-.  "-._\\  ^  /_.-"  .-.  "-.',
+  "          _/   .'   '.   _.-`---`-._   .'   '.   \\_",
+  "        .`   .'  _ _  '.(  .-\"\"\"-.  ).'  _ _  '.   `.",
+  "       /   .'   ( V )   \\ /  _ _  \\ /   ( V )   '.   \\",
+  '      ;   /      `-`     Y  (o o)  Y     `-`      \\   ;',
+  '      |  ;               | \\  ^  / |               ;  |',
+  '      ;  |               |  `---`  |               |  ;',
+  '       \\ ;               ;         ;               ; //',
+  '        `\\             .`         `.             //`',
+  '          `-.        .-"  LEVIATHAN  "-.        .-`',
+  '             `------`                   `------`',
+] as const;
+
+export const HAZARD_WARNING_SYMBOLS: Readonly<Record<HazardType, string>> = {
+  vent: '[▲]',
+  whirlpool: '[@]',
+  current: '[→]',
+  'toxic-cloud': '[☁]',
+};
 
 export const ENEMY_THUMBNAILS = {
   hermitCrab: [' (\\_/)', '<(o o)>', ' / V \\'],

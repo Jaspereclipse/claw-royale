@@ -119,7 +119,7 @@ export function getBossForDepth(depth: number): BossDefinition | null {
 /**
  * Create a boss encounter from a definition, scaling stats by depth.
  */
-export function createBossEncounter(definition: BossDefinition, depth: number): BossEncounter {
+export function createBossEncounter(definition: BossDefinition, depth: number, allocId: () => number): BossEncounter {
   const depthBeyond = Math.max(0, depth - definition.appearsAtDepth);
   const scale = Math.pow(1.2, depthBeyond);
 
@@ -128,6 +128,7 @@ export function createBossEncounter(definition: BossDefinition, depth: number): 
   const scaledDefense = Math.floor(definition.baseDefense * scale);
 
   const bossEnemy = new Enemy(
+    allocId(),
     definition.name,
     { x: 0, y: 0 }, // position set later when placed in level
     scaledHealth,
@@ -223,6 +224,7 @@ export function resolveBossAbility(
   ability: BossAbility,
   player: Player,
   level: Level,
+  allocId: () => number,
 ): AbilityResult {
   const messages: string[] = [];
   let damage = 0;
@@ -274,6 +276,7 @@ export function resolveBossAbility(
         const pos = findNearbyPosition(encounter.boss.position, level);
         if (!pos) break;
         const minion = new Enemy(
+          allocId(),
           'Minion',
           pos,
           5 + level.difficulty * 2,
@@ -350,6 +353,7 @@ export function processBossTurn(
   encounter: BossEncounter,
   player: Player,
   level: Level,
+  allocId: () => number,
 ): BossAction {
   const messages: string[] = [];
   let totalDamage = 0;
@@ -391,7 +395,7 @@ export function processBossTurn(
           a => a.effect.kind === 'enrage',
         );
         if (enrageAbility && !encounter.enraged) {
-          const result = resolveBossAbility(encounter, enrageAbility, player, level);
+          const result = resolveBossAbility(encounter, enrageAbility, player, level, allocId);
           messages.push(...result.messages);
           totalDamage += result.damage;
           events.push(...result.events);
@@ -406,7 +410,7 @@ export function processBossTurn(
     if (!usedAbility && Math.random() < useAbilityChance) {
       // Pick a random ready ability
       const ability = readyAbilities[Math.floor(Math.random() * readyAbilities.length)];
-      const result = resolveBossAbility(encounter, ability, player, level);
+      const result = resolveBossAbility(encounter, ability, player, level, allocId);
       messages.push(...result.messages);
       totalDamage += result.damage;
       events.push(...result.events);

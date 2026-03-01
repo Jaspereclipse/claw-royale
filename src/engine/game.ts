@@ -1,5 +1,5 @@
-import { Player, Enemy } from './entity.js';
-import { Level, generateLevel, LEVEL_WIDTH, LEVEL_HEIGHT } from './level.js';
+import { Player, Enemy, Item } from './entity.js';
+import { Level, generateLevel, generateBossRoom, isBossLevel, LEVEL_WIDTH, LEVEL_HEIGHT } from './level.js';
 import {
   CombatState,
   resolveCombat,
@@ -7,6 +7,8 @@ import {
   useAbility,
   useItem,
 } from './combat.js';
+import { createBossEncounter, processBossTurn, getBossForDepth } from './boss.js';
+import type { BossEncounter, GameEvent } from './types.js';
 
 export type Direction = 'up' | 'down' | 'left' | 'right';
 export type GameState = 'playing' | 'combat' | 'inventory' | 'gameover';
@@ -15,6 +17,7 @@ export const VISIBILITY_RADIUS = 8;
 export interface TurnResult {
   messages: string[];
   state: GameState;
+  events?: GameEvent[];
 }
 
 const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
@@ -34,6 +37,8 @@ export class Game {
   combatTarget: Enemy | null;
   readonly combatState: CombatState;
   private nextEntityId = 0;
+  bossEncounter: BossEncounter | null;
+  events: GameEvent[];
 
   constructor() {
     this.combatState = new CombatState();
@@ -44,6 +49,8 @@ export class Game {
     this.state = 'playing';
     this.messages = ['You descend to the ocean floor. The hunt begins.'];
     this.combatTarget = null;
+    this.bossEncounter = null;
+    this.events = [];
   }
 
   private allocId(): number {
@@ -67,6 +74,7 @@ export class Game {
     }
 
     this.messages = [];
+    this.events = [];
     this.turnCount++;
     this.player.tickCooldowns();
     this.combatState.tickShield();
@@ -78,18 +86,32 @@ export class Game {
     // Check for enemy at target position
     const enemy = this.level.getEnemyAt(newX, newY);
     if (enemy) {
-      const result = resolveCombat(this.player, enemy);
-      this.messages.push(result.message);
+      // Check if this enemy is a boss
+      if (this.bossEncounter && this.bossEncounter.boss === enemy) {
+        const result = resolveCombat(this.player, enemy);
+        this.messages.push(result.message);
 
-      if (result.killed) {
-        this.level.removeEnemy(enemy);
-        this.combatTarget = null;
-        // Move into the cleared space
-        this.player.position.x = newX;
-        this.player.position.y = newY;
+        if (result.killed) {
+          this.handleBossDefeated();
+          this.player.position.x = newX;
+          this.player.position.y = newY;
+        } else {
+          this.combatTarget = enemy;
+          this.state = 'combat';
+        }
       } else {
-        this.combatTarget = enemy;
-        this.state = 'combat';
+        const result = resolveCombat(this.player, enemy);
+        this.messages.push(result.message);
+
+        if (result.killed) {
+          this.level.removeEnemy(enemy);
+          this.combatTarget = null;
+          this.player.position.x = newX;
+          this.player.position.y = newY;
+        } else {
+          this.combatTarget = enemy;
+          this.state = 'combat';
+        }
       }
     } else if (this.level.isPassable(newX, newY)) {
       // Move player
@@ -108,13 +130,13 @@ export class Game {
       const tile = this.level.getTile(newX, newY);
       if (tile && tile.type === 'stairs') {
         this.descendLevel();
-        return { messages: this.messages, state: this.state };
+        return { messages: this.messages, state: this.state, events: this.events };
       }
     } else {
       this.messages.push('Blocked!');
     }
 
-    // Process enemy turns
+    // Process enemy turns (boss uses special AI)
     this.processEnemyTurns();
 
     // Check player death
@@ -123,7 +145,7 @@ export class Game {
       this.messages.push(`You have been defeated at depth ${this.depth}. Final score: ${this.player.score}`);
     }
 
-    return { messages: this.messages, state: this.state };
+    return { messages: this.messages, state: this.state, events: this.events };
   }
 
   processCombatTurn(action: 'attack' | 'ability' | 'item', param?: string | number): TurnResult {
@@ -132,21 +154,27 @@ export class Game {
     }
 
     this.messages = [];
+    this.events = [];
     this.turnCount++;
     this.player.tickCooldowns();
     this.combatState.tickShield();
 
     const enemy = this.combatTarget;
+    const isBoss = this.bossEncounter !== null && this.bossEncounter.boss === enemy;
 
     switch (action) {
       case 'attack': {
         const result = resolveCombat(this.player, enemy);
         this.messages.push(result.message);
         if (result.killed) {
-          this.level.removeEnemy(enemy);
+          if (isBoss) {
+            this.handleBossDefeated();
+          } else {
+            this.level.removeEnemy(enemy);
+          }
           this.combatTarget = null;
           this.state = 'playing';
-          return { messages: this.messages, state: this.state };
+          return { messages: this.messages, state: this.state, events: this.events };
         }
         break;
       }
@@ -161,10 +189,14 @@ export class Game {
           return { messages: this.messages, state: this.state };
         }
         if (!enemy.isAlive) {
-          this.level.removeEnemy(enemy);
+          if (isBoss) {
+            this.handleBossDefeated();
+          } else {
+            this.level.removeEnemy(enemy);
+          }
           this.combatTarget = null;
           this.state = 'playing';
-          return { messages: this.messages, state: this.state };
+          return { messages: this.messages, state: this.state, events: this.events };
         }
         break;
       }
@@ -179,10 +211,16 @@ export class Game {
       }
     }
 
-    // Enemy counter-attack
+    // Boss or enemy counter-attack
     if (enemy.isAlive && !this.combatState.consumeEnemySkipTurn()) {
-      const enemyResult = resolveEnemyAttack(enemy, this.player, this.combatState);
-      this.messages.push(enemyResult.message);
+      if (isBoss && this.bossEncounter) {
+        const bossResult = processBossTurn(this.bossEncounter, this.player, this.level, () => this.allocId());
+        this.messages.push(...bossResult.messages);
+        this.events.push(...bossResult.events);
+      } else {
+        const enemyResult = resolveEnemyAttack(enemy, this.player, this.combatState);
+        this.messages.push(enemyResult.message);
+      }
     }
 
     if (!this.player.isAlive) {
@@ -190,7 +228,7 @@ export class Game {
       this.messages.push(`Defeated at depth ${this.depth}. Final score: ${this.player.score}`);
     }
 
-    return { messages: this.messages, state: this.state };
+    return { messages: this.messages, state: this.state, events: this.events };
   }
 
   useExplorationAbility(abilityName: string): TurnResult {
@@ -263,8 +301,17 @@ export class Game {
       return;
     }
 
+    // Process boss turn separately if active and not in direct combat
+    if (this.bossEncounter && this.bossEncounter.boss.isAlive && this.state !== 'combat') {
+      const bossResult = processBossTurn(this.bossEncounter, this.player, this.level, () => this.allocId());
+      this.messages.push(...bossResult.messages);
+      this.events.push(...bossResult.events);
+    }
+
     for (const enemy of this.level.enemies) {
       if (!enemy.isAlive) continue;
+      // Skip boss — handled above
+      if (this.bossEncounter && this.bossEncounter.boss === enemy) continue;
       if (!this.isVisible(enemy.position.x, enemy.position.y)) continue;
 
       const dx = this.player.position.x - enemy.position.x;
@@ -345,14 +392,54 @@ export class Game {
     }
   }
 
+  private handleBossDefeated(): void {
+    if (!this.bossEncounter) return;
+
+    const def = this.bossEncounter.definition;
+    const xp = def.xpReward;
+    this.player.score += xp;
+    this.level.removeEnemy(this.bossEncounter.boss);
+    this.messages.push(`${def.name} has been defeated! +${xp} XP!`);
+
+    // Drop special loot
+    const loot = new Item('Boss Trophy', '*', '\x1b[33;1m', 'score', xp);
+    this.player.inventory.push(loot);
+    this.messages.push(`Obtained Boss Trophy!`);
+
+    this.events.push({ kind: 'boss-defeated', boss: def, xp });
+    this.bossEncounter = null;
+  }
+
   private descendLevel(): void {
     this.depth++;
-    this.level = generateLevel(this.depth, () => this.allocId());
-    this.player.position = { ...this.level.playerStart };
-    this.player.level++;
-    this.combatState.reset();
+    this.bossEncounter = null;
     this.combatTarget = null;
+    this.combatState.reset();
+
+    if (isBossLevel(this.depth)) {
+      this.level = generateBossRoom(this.depth, () => this.allocId());
+      this.player.position = { ...this.level.playerStart };
+
+      // Place boss in center
+      const bossDef = getBossForDepth(this.depth);
+      if (bossDef) {
+        const encounter = createBossEncounter(bossDef, this.depth, () => this.allocId());
+        const centerX = Math.floor(LEVEL_WIDTH / 2);
+        const centerY = Math.floor(LEVEL_HEIGHT / 2);
+        encounter.boss.position = { x: centerX, y: centerY };
+        this.level.enemies.push(encounter.boss);
+        this.bossEncounter = encounter;
+
+        this.events.push({ kind: 'boss-encounter', boss: bossDef });
+        this.messages.push(`Descended to depth ${this.depth}. ${bossDef.flavorText}`);
+      }
+    } else {
+      this.level = generateLevel(this.depth, () => this.allocId());
+      this.player.position = { ...this.level.playerStart };
+      this.messages.push(`Descended to depth ${this.depth}. The currents grow stronger...`);
+    }
+
+    this.player.level++;
     this.state = 'playing';
-    this.messages.push(`Descended to depth ${this.depth}. The currents grow stronger...`);
   }
 }
